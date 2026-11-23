@@ -1,0 +1,26 @@
+# Gradle
+.gradle/
+build/
+app/build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# IDE
+.idea/
+*.iml
+local.properties
+
+# Android
+*.apk
+!debug outputs intentionally excluded
+captures/
+
+# macOS / Swift
+ios/.build/
+ios/.swiftpm/
+*.xcodeproj
+xcuserdata/
+DerivedData/
+
+# Misc
+*.log
+.DS_Store
