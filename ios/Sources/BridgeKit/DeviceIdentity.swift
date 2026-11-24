@@ -7,7 +7,7 @@ import CryptoKit
 public final class DeviceIdentity {
 
     public struct Public {
-        public let x963: Data
+        public let spki: Data
         public let fingerprint: String
     }
 
@@ -33,21 +33,21 @@ public final class DeviceIdentity {
             try saveToKeychain(privateKey.rawRepresentation)
         }
 
-        let x963 = privateKey.publicKey.x963Representation
-        let identity = Public(x963: x963, fingerprint: Self.fingerprint(of: x963))
+        let spki = privateKey.publicKey.derRepresentation
+        let identity = Public(spki: spki, fingerprint: Self.fingerprint(of: spki))
         self.privateKey = privateKey
         self.cached = identity
         return identity
     }
 
-    public static func fingerprint(of x963: Data) -> String {
-        Crypto.sha256(x963).base64URLEncodedString()
+    public static func fingerprint(of spki: Data) -> String {
+        Crypto.sha256(spki).base64URLEncodedString()
     }
 
-    /// ECDH against the peer's X.963 point, then HKDF into the session master.
-    public func agree(peerX963: Data, salt: Data) throws -> Data {
+    /// ECDH against peer SPKI, then HKDF into session master.
+    public func agree(peerSPKI: Data, salt: Data) throws -> Data {
         guard let privateKey = privateKey else { throw IdentityError.notLoaded }
-        let shared = try Crypto.ecdh(privateKey: privateKey, peerX963: peerX963)
+        let shared = try Crypto.ecdh(privateKey: privateKey, peerSPKI: peerSPKI)
         return HKDF.derive(ikm: shared, salt: salt, info: Data("bridge-v1 master".utf8), length: 32)
     }
 
@@ -58,9 +58,9 @@ public final class DeviceIdentity {
         return signature.derRepresentation
     }
 
-    public static func verify(peerX963: Data, data: Data, signature: Data) -> Bool {
+    public static func verify(peerSPKI: Data, data: Data, signature: Data) -> Bool {
         guard
-            let peer = try? Crypto.parsePublicX963(peerX963),
+            let peer = try? Crypto.parsePublicSPKI(peerSPKI),
             let sig = try? P256.Signing.ECDSASignature(derRepresentation: signature)
         else { return false }
         return peer.isValidSignature(sig, for: data)

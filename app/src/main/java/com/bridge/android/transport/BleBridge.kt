@@ -29,6 +29,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Hardened BLE GATT server.
@@ -57,6 +58,10 @@ class BleBridge(
     private var advertiser: BluetoothLeAdvertiser? = null
     private var characteristic: BluetoothGattCharacteristic? = null
     private val subscribed = ConcurrentHashMap.newKeySet<String>()
+    private val connectionGeneration = AtomicLong(0)
+    @Volatile private var activeGeneration = 0L
+    @Volatile private var activeAddress: String? = null
+    @Volatile private var handshakeStarted = false
 
     private val io: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor { r ->
         Thread(r, "bridge-ble-io").apply { isDaemon = true }
@@ -81,20 +86,18 @@ class BleBridge(
         override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
             if (status != BluetoothGatt.GATT_SUCCESS) {
                 onStatus("gatt_connection_failed:$status")
+                clearConnection(device.address)
                 return
             }
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
-                    onStatus("connected")
-                    startHandshake(device)
+                    clearConnection(device.address)
+                    activeGeneration = connectionGeneration.incrementAndGet()
+                    activeAddress = device.address
+                    onStatus("connected:g$activeGeneration")
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
-                    subscribed.remove(device.address)
-                    if (session?.device?.address == device.address) {
-                        session = null
-                        reassembler.reset()
-                        handshake.abort()
-                    }
+                    if (activeAddress == device.address) clearConnection(device.address)
                     onStatus("disconnected")
                 }
             }
@@ -104,6 +107,10 @@ class BleBridge(
             if (service.uuid != SERVICE_UUID) return
             if (status != BluetoothGatt.GATT_SUCCESS) {
                 onStatus("gatt_service_failed:$status")
+                server?.close()
+                server = null
+                advertiser = null
+                characteristic = null
                 return
             }
             startAdvertising()
@@ -126,8 +133,13 @@ class BleBridge(
             respond(device, requestId, responseNeeded, if (valid) BluetoothGatt.GATT_SUCCESS else BluetoothGatt.GATT_REQUEST_NOT_SUPPORTED)
             if (!valid) return
             if (value.contentEquals(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)) {
+                if (activeAddress != device.address) return
                 subscribed += device.address
                 onStatus("notifications_enabled")
+                if (!handshakeStarted) {
+                    handshakeStarted = true
+                    startHandshake(device)
+                }
             } else {
                 subscribed -= device.address
                 onStatus("notifications_disabled")
@@ -175,6 +187,7 @@ class BleBridge(
         val bleServer = runCatching { manager.openGattServer(context, callback) }.getOrNull()
             ?: return "GATT server unavailable"
         server = bleServer
+        onStatus("gatt_server_started")
 
         val chr = BluetoothGattCharacteristic(
             CHARACTERISTIC_UUID,
@@ -191,8 +204,19 @@ class BleBridge(
 
         val service = BluetoothGattService(SERVICE_UUID, BluetoothGattService.SERVICE_TYPE_PRIMARY)
             .apply { addCharacteristic(chr) }
-        advertiser = adapter.bluetoothLeAdvertiser ?: return "BLE advertiser unavailable"
-        if (!bleServer.addService(service)) return "GATT service registration rejected"
+        advertiser = adapter.bluetoothLeAdvertiser ?: run {
+            bleServer.close()
+            server = null
+            characteristic = null
+            return "BLE advertiser unavailable"
+        }
+        if (!bleServer.addService(service)) {
+            bleServer.close()
+            server = null
+            advertiser = null
+            characteristic = null
+            return "GATT service registration rejected"
+        }
 
         writer = GattWriter(dispatch = ::dispatchRaw, onDropped = { onStatus("writer_dropped:$it") })
         onStatus("gatt_server_open")
@@ -240,7 +264,7 @@ class BleBridge(
             .addServiceUuid(ParcelUuid(SERVICE_UUID))
             .build()
         advertiseCallback = object : AdvertiseCallback() {
-            override fun onStartSuccess(settingsInEffect: AdvertiseSettings) = onStatus("advertising")
+            override fun onStartSuccess(settingsInEffect: AdvertiseSettings) = onStatus("advertising_started")
             override fun onStartFailure(errorCode: Int) = onStatus("advertise_failed:$errorCode")
         }
         runCatching {
@@ -268,12 +292,25 @@ class BleBridge(
     // ---------------------------------------------------------------- handshake
 
     private fun startHandshake(device: BluetoothDevice) {
-        // One authenticated peer at a time: a new connection discards the old
-        // session and forces a fresh handshake.
+        if (activeAddress != device.address || !subscribed.contains(device.address)) return
         session = null
         reassembler.reset()
         handshake.abort()
+        onStatus("handshake_started:g$activeGeneration")
         sendPlain(device, handshake.start(Handshake.Role.RESPONDER))
+    }
+
+    private fun clearConnection(address: String) {
+        if (activeAddress != null && activeAddress != address) return
+        session = null
+        handshake.abort()
+        reassembler.reset()
+        subscribed.remove(address)
+        handshakeStarted = false
+        activeAddress = null
+        activeGeneration = 0L
+        writer?.clear(address)
+        onStatus("connection_state_cleared")
     }
 
     private fun handleIncoming(device: BluetoothDevice, value: ByteArray) {
@@ -294,6 +331,9 @@ class BleBridge(
                 is Handshake.Outcome.Failed -> {
                     onStatus("handshake_failed:${outcome.reason}")
                     handshake.abort()
+                    session = null
+                    reassembler.reset()
+                    handshakeStarted = false
                 }
                 is Handshake.Outcome.Established -> {
                     val established = Session(
@@ -318,6 +358,7 @@ class BleBridge(
             return
         }
 
+        if (activeAddress != device.address || !subscribed.contains(device.address)) return
         if (current.device.address != device.address) {
             onStatus("foreign_device_rejected")
             return

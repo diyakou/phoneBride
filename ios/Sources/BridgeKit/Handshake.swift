@@ -26,6 +26,7 @@ public final class Handshake {
 
     public private(set) var phase: Phase = .idle
     public private(set) var result: Result?
+    public var peerPublicKey: Data { peerX963 }
 
     private let identity: DeviceIdentity
     private let store: PairingStore
@@ -46,13 +47,13 @@ public final class Handshake {
     /// Opens the handshake: returns the hs_hello frame to send to the phone.
     public func start() throws -> Data {
         let me = try identity.load()
-        localX963 = me.x963
+        localX963 = me.spki
         phase = .awaitingHello
 
         let frame: [String: Any] = [
             "t": "hs_hello",
             "role": "i",
-            "spki": me.x963.base64EncodedString(),
+            "spki": me.spki.base64EncodedString(),
             "nonce": localNonce.base64EncodedString(),
         ]
         return try JSONSerialization.data(withJSONObject: frame)
@@ -99,7 +100,7 @@ public final class Handshake {
             responderX963: peerSpki,
             responderNonce: peerNonce
         )
-        master = try identity.agree(peerX963: peerSpki, salt: transcript)
+        master = try identity.agree(peerSPKI: peerSpki, salt: transcript)
         phase = .awaitingConfirm
 
         let payload = Self.confirmPayload(transcript)
@@ -120,7 +121,7 @@ public final class Handshake {
             phase = .failed
             throw HandshakeError.badSignature
         }
-        guard DeviceIdentity.verify(peerX963: peerX963, data: Self.confirmPayload(transcript), signature: signature) else {
+        guard DeviceIdentity.verify(peerSPKI: peerX963, data: Self.confirmPayload(transcript), signature: signature) else {
             phase = .failed
             throw HandshakeError.signatureRejected
         }

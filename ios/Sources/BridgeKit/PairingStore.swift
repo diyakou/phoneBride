@@ -6,7 +6,7 @@ public final class PairingStore {
 
     public struct Peer {
         public let fingerprint: String
-        public let x963: Data
+        public let spki: Data
         public let label: String
         public let pairedAt: Date
     }
@@ -25,12 +25,12 @@ public final class PairingStore {
         return raw.compactMap { entry in
             guard
                 let fingerprint = entry["fp"] as? String,
-                let x963b64 = entry["spki"] as? String,
-                let x963 = Data(base64Encoded: x963b64)
+                let spkiB64 = entry["spki"] as? String,
+                let spki = Data(base64Encoded: spkiB64)
             else { return nil }
             return Peer(
                 fingerprint: fingerprint,
-                x963: x963,
+                spki: spki,
                 label: entry["label"] as? String ?? "",
                 pairedAt: entry["at"] as? Date ?? Date.distantPast
             )
@@ -41,10 +41,10 @@ public final class PairingStore {
         all().contains { $0.fingerprint == fingerprint }
     }
 
-    public func trust(x963: Data, fingerprint: String, label: String) {
+    public func trust(spki: Data, fingerprint: String, label: String) {
         var peers = all()
         peers.removeAll { $0.fingerprint == fingerprint }
-        peers.append(Peer(fingerprint: fingerprint, x963: x963, label: label, pairedAt: Date()))
+        peers.append(Peer(fingerprint: fingerprint, spki: spki, label: label, pairedAt: Date()))
         persist(peers)
     }
 
@@ -62,7 +62,7 @@ public final class PairingStore {
         let raw: [[String: Any]] = peers.map {
             [
                 "fp": $0.fingerprint,
-                "spki": $0.x963.base64EncodedString(),
+                "spki": $0.spki.base64EncodedString(),
                 "label": $0.label,
                 "at": $0.pairedAt,
             ]

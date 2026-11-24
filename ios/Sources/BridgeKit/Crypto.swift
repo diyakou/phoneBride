@@ -20,18 +20,16 @@ public enum Crypto {
     /// the Keychain. The private key never leaves hardware.
     public static func generateIdentity() throws -> (privateKey: P256.KeyAgreement.PrivateKey, spki: Data) {
         let privateKey = try P256.KeyAgreement.PrivateKey.generate()
-        let spki = privateKey.publicKey.x963Representation
+        let spki = privateKey.publicKey.derRepresentation
         return (privateKey, spki)
     }
 
-    /// X.963 = 0x04 || X || Y, which is what the Android side sends as the
-    /// uncompressed EC point inside its SPKI body.
-    public static func parsePublicX963(_ data: Data) throws -> P256.KeyAgreement.PublicKey {
-        try P256.KeyAgreement.PublicKey(x963Representation: data)
+    public static func parsePublicSPKI(_ data: Data) throws -> P256.KeyAgreement.PublicKey {
+        try P256.KeyAgreement.PublicKey(derRepresentation: data)
     }
 
-    public static func ecdh(privateKey: P256.KeyAgreement.PrivateKey, peerX963: Data) throws -> Data {
-        let peer = try parsePublicX963(peerX963)
+    public static func ecdh(privateKey: P256.KeyAgreement.PrivateKey, peerSPKI: Data) throws -> Data {
+        let peer = try parsePublicSPKI(peerSPKI)
         return try privateKey.sharedSecretFromKeyAgreement(with: peer).x963Representation
     }
 }

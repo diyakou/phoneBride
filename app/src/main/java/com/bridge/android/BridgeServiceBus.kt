@@ -47,6 +47,9 @@ object BridgeServiceBus {
         ensureRunning(context)
     }
 
+    fun confirmPairing(fingerprint: String): Boolean =
+        service.get()?.bleConfirmPairing(fingerprint) == true
+
     fun smsPartResult(id: String, part: Int, ok: Boolean, delivered: Boolean, detail: String?): JSONObject? =
         service.get()?.smsResult(id, part, ok, delivered, detail)
 

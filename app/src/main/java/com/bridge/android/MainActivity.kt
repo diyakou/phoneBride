@@ -7,6 +7,7 @@ import android.os.Bundle
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
+import org.json.JSONObject
 import com.bridge.android.crypto.DeviceIdentity
 import com.bridge.android.crypto.PairingStore
 
@@ -17,6 +18,8 @@ import com.bridge.android.crypto.PairingStore
 class MainActivity : Activity() {
 
     private lateinit var status: TextView
+    private var lastBleEvent = ""
+    private var pendingFingerprint = ""
 
     private val permissions = arrayOf(
         Manifest.permission.BLUETOOTH_SCAN,
@@ -38,6 +41,7 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        BridgeServiceBus.listeners += ::showBridgeEvent
         status = TextView(this).apply {
             textSize = 14f
             setPadding(32, 48, 32, 32)
@@ -45,6 +49,14 @@ class MainActivity : Activity() {
         setContentView(LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             addView(status)
+            addView(Button(this@MainActivity).apply {
+                text = "Confirm Pairing SAS"
+                setOnClickListener {
+                    if (pendingFingerprint.isNotEmpty()) {
+                        BridgeServiceBus.confirmPairing(pendingFingerprint)
+                    }
+                }
+            })
             addView(Button(this@MainActivity).apply {
                 text = "Unpair all companions"
                 setOnClickListener {
@@ -57,10 +69,32 @@ class MainActivity : Activity() {
         requestMissingPermissions()
     }
 
+    override fun onDestroy() {
+        BridgeServiceBus.listeners -= ::showBridgeEvent
+        super.onDestroy()
+    }
+
     override fun onResume() {
         super.onResume()
         renderStatus()
         if (bluetoothPermissionsGranted()) startBridge()
+    }
+
+    private fun showBridgeEvent(message: JSONObject) {
+        runOnUiThread {
+            val type = message.optString("t")
+            val detail = when (type) {
+                "pair_request" -> {
+                    pendingFingerprint = message.optString("fp")
+                    "SAS: ${message.optString("sas")}\nConfirm same code on iPhone"
+                }
+                "ble_status" -> message.optString("status")
+                "peer_trusted" -> "trusted"
+                else -> message.optString("status").ifBlank { message.optString("sas") }
+            }
+            lastBleEvent = detail
+            status.text = "Bridge\n$lastBleEvent\n\n${status.text}"
+        }
     }
 
     private fun renderStatus() {
@@ -70,6 +104,7 @@ class MainActivity : Activity() {
             append("Bridge\n")
             append("identity: ${DeviceIdentity.publicIdentity().fingerprint.take(12)}…\n")
             append("peers: ${peers.size}\n")
+            if (lastBleEvent.isNotEmpty()) append("BLE: $lastBleEvent\n")
             peers.forEach { append("  ${it.label} (${it.fingerprint.take(12)}…)\n") }
         }
     }

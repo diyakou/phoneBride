@@ -31,6 +31,9 @@ public final class BleTransport: NSObject {
     private var handshake: Handshake?
     private let reassembler = Fragmenter.Reassembler()
     private var channel: SecureChannel?
+    private var peerSPKI = Data()
+    private var handshakeStarted = false
+    private var generation = UUID()
 
     private let queue = DispatchQueue(label: "bridge.ble.io")
     private let stateLock = NSLock()
@@ -115,7 +118,7 @@ public final class BleTransport: NSObject {
                 handshake.phase == .established
             else { return }
             self.store.trust(
-                x963: self.peerX963,
+                spki: self.peerSPKI,
                 fingerprint: result.peerFingerprint,
                 label: "Android bridge"
             )
@@ -131,8 +134,6 @@ public final class BleTransport: NSObject {
             self?.setState(.idle)
         }
     }
-
-    private var peerX963: Data = Data()
 
     private func write(_ data: Data) {
         guard let peripheral = peripheral, let characteristic = characteristic else { return }
@@ -160,6 +161,22 @@ public final class BleTransport: NSObject {
     }
 
     private func handleIncoming(_ data: Data) {
+        if let channel {
+            guard let plaintext = channel.open(data) else {
+                print("Bridge BLE generation=\(generation.uuidString) decrypt_failed bytes=\(data.count)")
+                return
+            }
+            guard let frame = try? JSONSerialization.jsonObject(with: plaintext) as? [String: Any] else { return }
+            if frame["t"] as? String == "fr" {
+                guard let complete = try? reassembler.push(frame),
+                      let message = try? JSONSerialization.jsonObject(with: complete) as? [String: Any]
+                else { return }
+                DispatchQueue.main.async { [weak self] in self?.onMessage?(message) }
+                return
+            }
+            DispatchQueue.main.async { [weak self] in self?.onMessage?(frame) }
+            return
+        }
         // Before the session is up, only plaintext handshake frames arrive.
         if channel == nil {
             guard let handshake = handshake else { return }
@@ -169,7 +186,8 @@ public final class BleTransport: NSObject {
                 }
                 if handshake.phase == .established, let result = handshake.result {
                     channel = result.channel
-                    peerX963 = peerX963.isEmpty ? handshakePeerX963() : peerX963
+                    peerSPKI = handshake.peerPublicKey
+                    handshakeStarted = true
                     if store.isTrusted(fingerprint: result.peerFingerprint) {
                         setState(.ready)
                         send(["t": "ready", "trusted": true])
@@ -182,8 +200,9 @@ public final class BleTransport: NSObject {
                     }
                 }
             } catch {
-                setState(.failed("handshake_failed"))
+                print("Bridge BLE generation=\(generation.uuidString) handshake_failed error=\(error)")
                 handshake.abort()
+                setState(.failed("handshake_failed"))
             }
             return
         }
@@ -214,7 +233,7 @@ public final class BleTransport: NSObject {
     private func handshakePeerX963() -> Data {
         // The handshake keeps it private; expose via the fingerprint lookup in
         // the store once trusted, otherwise derive from the transcript context.
-        return store.all().first?.x963 ?? Data()
+        return store.all().first?.spki ?? Data()
     }
 }
 

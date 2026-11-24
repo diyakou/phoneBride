@@ -133,6 +133,8 @@ class BridgeService : Service() {
 
     // ---------------------------------------------------------------- outbound
 
+    fun bleConfirmPairing(fingerprint: String): Boolean = ble.confirmPairing(fingerprint)
+
     fun publish(message: JSONObject) {
         BridgeServiceBus.listeners.forEach { runCatching { it(message) } }
         if (ble.currentPeerFingerprint() != null) {

@@ -1,6 +1,7 @@
 package com.bridge.android.crypto
 
 import android.util.Base64
+import android.util.Log
 import org.json.JSONObject
 import java.security.SecureRandom
 
@@ -102,6 +103,7 @@ class Handshake(
             transcript(peerSpki, peerNonce, current.localSpki, current.localNonce)
         }
         val master = runCatching { DeviceIdentity.agree(peerSpki, transcript) }
+            .onFailure { Log.e("PhoneBridge", "ECDH failed: peerSpki=${peerSpki.size} bytes", it) }
             .getOrNull() ?: return Outcome.Failed("ecdh_failed")
 
         state = current.copy(transcript = transcript, peer = peer, master = master)

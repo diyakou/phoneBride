@@ -71,6 +71,10 @@ class GattWriter(
         return false
     }
 
+    fun clear(address: String) {
+        queue.removeIf { it.address == address }
+    }
+
     fun shutdown() {
         queue.clear()
         scheduled.shutdownNow()
